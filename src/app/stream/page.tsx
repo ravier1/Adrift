@@ -87,7 +87,7 @@ const StreamContent = () => {
           </button>
         </div>
       </div>
-      <div className="h-[40vh] lg:h-screen lg:w-96">
+      <div className="h-[40vh] lg:h-screen lg:w-96 -ml-px">
         <TwitchChatEmbed 
           channel={twitchStreamer} 
           parent={env.NEXT_PUBLIC_DOMAIN}
