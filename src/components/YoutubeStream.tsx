@@ -5,7 +5,7 @@
 /* eslint-disable @typescript-eslint/no-unnecessary-type-assertion */
 
 // src/components/YouTubeStream.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 
 interface YouTubeStreamProps {
   username: string;
@@ -44,6 +44,7 @@ const YouTubeStream: React.FC<YouTubeStreamProps> = ({ username }) => {
   const [videoId, setVideoId] = useState<string | null>(null);
   const [channelId, setChannelId] = useState<string | null>(null);
   const [useFallback, setUseFallback] = useState<boolean>(false);
+  const [streamFound, setStreamFound] = useState<boolean>(false);
   const cleanUsername = username.replace(/^@/, '');
   
   // Updated fallback embed URL using channel ID
@@ -52,7 +53,7 @@ const YouTubeStream: React.FC<YouTubeStreamProps> = ({ username }) => {
     : `https://www.youtube.com/embed?frame=1&listType=user_uploads&list=${cleanUsername}&live=1&autoplay=1`;
 
   useEffect(() => {
-    if (!username) return;
+    if (!username || streamFound) return; // Don't fetch if we already found a stream
     
     // Cool debug header for the component
     console.debug(
@@ -66,134 +67,155 @@ const YouTubeStream: React.FC<YouTubeStreamProps> = ({ username }) => {
     
     const fetchLiveStream = async () => {
       try {
-        // Step 1: Get the channel ID from the username
-        console.debug(
-          '%c🔍 STEP 1: %cSearching for channel...',
-          'color: #4285f4; font-weight: bold;', 'color: #cccccc;'
-        );
-        
-        const channelResponse = await fetch(
-          `/api/youtube?action=channel&username=${cleanUsername}`
-        );
-
-        // Handle rate limit error
-        if (channelResponse.status === 429) {
+        // Step 1: Get the channel ID from the username or scraping
+        if (!channelId) {
+          // Only fetch channel ID if we don't have it yet
           console.debug(
-            '%c⚠️ RATE LIMIT: %cAPI quota exceeded, falling back to channel ID method...',
-            'background: #FF5722; color: white; padding: 2px 5px; border-radius: 3px; font-weight: bold;',
-            'color: #FF5722;'
+            '%c🔍 STEP 1: %cSearching for channel...',
+            'color: #4285f4; font-weight: bold;', 'color: #cccccc;'
           );
           
-          // Try scraping method immediately
+          // Try scraping first to avoid API usage
           const scrapeResponse = await fetch(
             `/api/youtube?action=scrape&username=${cleanUsername}`
           );
           const scrapeData = (await scrapeResponse.json()) as ScrapeResponse;
+          
           if (scrapeData.channelId) {
             setChannelId(scrapeData.channelId);
             setUseFallback(true);
+            setStreamFound(true); // Mark as found to prevent further API calls
             return;
           }
-        }
-        
-        const channelData = await channelResponse.json() as YouTubeChannelResponse;
-        
-        // If no channel found, try searching for the channel
-        let foundChannelId = channelData.items?.[0]?.id;
-        if (!foundChannelId) {
-          console.debug(
-            '%c⚠️ Channel not found directly. Trying search API...',
-            'color: #fbbc05; font-style: italic;'
+
+          // If scraping fails, try API methods
+          const channelResponse = await fetch(
+            `/api/youtube?action=channel&username=${cleanUsername}`
           );
-          
-          const searchResponse = await fetch(
-            `/api/youtube?action=search&username=${cleanUsername}`
-          );
-          const searchData = await searchResponse.json() as YouTubeSearchResponse;
-          
-          const firstItem = searchData.items?.[0];
-          foundChannelId = typeof firstItem?.id === 'string' 
-            ? firstItem.id 
-            : firstItem?.snippet?.channelId || '';
-            
-          // If still no channel ID, try scraping method
-          if (!foundChannelId) {
+
+          // Handle rate limit error
+          if (channelResponse.status === 429) {
             console.debug(
-              '%c⚠️ Channel not found via API. Trying scrape method...',
-              'color: #fbbc05; font-style: italic;'
+              '%c⚠️ RATE LIMIT: %cAPI quota exceeded, falling back to channel ID method...',
+              'background: #FF5722; color: white; padding: 2px 5px; border-radius: 3px; font-weight: bold;',
+              'color: #FF5722;'
             );
             
+            // Try scraping method immediately
             const scrapeResponse = await fetch(
               `/api/youtube?action=scrape&username=${cleanUsername}`
             );
             const scrapeData = (await scrapeResponse.json()) as ScrapeResponse;
-            foundChannelId = scrapeData.channelId ?? '';
+            if (scrapeData.channelId) {
+              setChannelId(scrapeData.channelId);
+              setUseFallback(true);
+              return;
+            }
           }
-        }
-        
-        if (!foundChannelId) {
+          
+          const channelData = await channelResponse.json() as YouTubeChannelResponse;
+          
+          // If no channel found, try searching for the channel
+          let foundChannelId = channelData.items?.[0]?.id;
+          if (!foundChannelId) {
+            console.debug(
+              '%c⚠️ Channel not found directly. Trying search API...',
+              'color: #fbbc05; font-style: italic;'
+            );
+            
+            const searchResponse = await fetch(
+              `/api/youtube?action=search&username=${cleanUsername}`
+            );
+            const searchData = await searchResponse.json() as YouTubeSearchResponse;
+            
+            const firstItem = searchData.items?.[0];
+            foundChannelId = typeof firstItem?.id === 'string' 
+              ? firstItem.id 
+              : firstItem?.snippet?.channelId || '';
+              
+            // If still no channel ID, try scraping method
+            if (!foundChannelId) {
+              console.debug(
+                '%c⚠️ Channel not found via API. Trying scrape method...',
+                'color: #fbbc05; font-style: italic;'
+              );
+              
+              const scrapeResponse = await fetch(
+                `/api/youtube?action=scrape&username=${cleanUsername}`
+              );
+              const scrapeData = (await scrapeResponse.json()) as ScrapeResponse;
+              foundChannelId = scrapeData.channelId ?? '';
+            }
+          }
+          
+          if (!foundChannelId) {
+            console.debug(
+              '%c❌ FAILED: %cCould not find channel ID for %c' + cleanUsername,
+              'background: #EA4335; color: white; padding: 2px 5px; border-radius: 3px; font-weight: bold;',
+              'color: #EA4335;',
+              'color: white; font-weight: bold;'
+            );
+            setUseFallback(true);
+            return;
+          }
+          
+          // Store the channel ID for fallback use
+          setChannelId(foundChannelId);
+          
           console.debug(
-            '%c❌ FAILED: %cCould not find channel ID for %c' + cleanUsername,
-            'background: #EA4335; color: white; padding: 2px 5px; border-radius: 3px; font-weight: bold;',
-            'color: #EA4335;',
+            '%c✅ SUCCESS: %cFound channel ID: %c' + foundChannelId,
+            'background: #34A853; color: white; padding: 2px 5px; border-radius: 3px; font-weight: bold;',
+            'color: #34A853;',
             'color: white; font-weight: bold;'
           );
-          setUseFallback(true);
+        }
+
+        // Don't proceed with live stream check if we're using fallback
+        if (useFallback) {
+          setStreamFound(true);
           return;
         }
-        
-        // Store the channel ID for fallback use
-        setChannelId(foundChannelId);
-        
-        console.debug(
-          '%c✅ SUCCESS: %cFound channel ID: %c' + foundChannelId,
-          'background: #34A853; color: white; padding: 2px 5px; border-radius: 3px; font-weight: bold;',
-          'color: #34A853;',
-          'color: white; font-weight: bold;'
-        );
-        
-        // Step 2: Search for live streams on the channel
-        console.debug(
-          '%c🔍 STEP 2: %cLooking for active livestream...',
-          'color: #4285f4; font-weight: bold;', 'color: #cccccc;'
-        );
-        
-        const liveStreamResponse = await fetch(
-          `/api/youtube?action=live&username=${cleanUsername}&channelId=${foundChannelId}`
-        );
-        const liveStreamData = await liveStreamResponse.json() as YouTubeSearchResponse;
-        
-        // Fixed type checking for the YouTube API response
-        if (liveStreamData.items?.[0]) {
-          const firstItem = liveStreamData.items[0];
-          const videoIdObj = firstItem.id;
-          
-          // Handle both string and object video IDs
-          const finalVideoId = typeof videoIdObj === 'string' 
-            ? videoIdObj
-            : 'videoId' in videoIdObj ? videoIdObj.videoId : null;
-            
-          if (finalVideoId) {
-            setVideoId(finalVideoId);
-            console.debug(
-              '%c✅ SUCCESS: %cFound livestream with ID: %c' + finalVideoId + '\n' +
-              '%c━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
-              'background: #34A853; color: white; padding: 2px 5px; border-radius: 3px; font-weight: bold;',
-              'color: #34A853;',
-              'color: white; font-weight: bold;',
-              'color: #6441a5; font-weight: bold;'
-            );
-          } else {
-            setUseFallback(true);
-          }
-        } else {
+
+        // Step 2: Only check for live streams if we haven't found one yet
+        if (!streamFound && channelId) {
           console.debug(
-            '%c⚠️ WARNING: %cNo livestream found for channel: %c' + foundChannelId,
-            'background: #FBBC05; color: white; padding: 2px 5px; border-radius: 3px; font-weight: bold;',
-            'color: #FBBC05;',
-            'color: white; font-weight: bold;'
+            '%c🔍 STEP 2: %cLooking for active livestream...',
+            'color: #4285f4; font-weight: bold;', 'color: #cccccc;'
           );
+          
+          const liveStreamResponse = await fetch(
+            `/api/youtube?action=live&username=${cleanUsername}&channelId=${channelId}`
+          );
+          const liveStreamData = await liveStreamResponse.json() as YouTubeSearchResponse;
+          
+          // Fixed type checking for the YouTube API response
+          if (liveStreamData.items?.[0]) {
+            const firstItem = liveStreamData.items[0];
+            const videoIdObj = firstItem.id;
+            
+            // Handle both string and object video IDs
+            const finalVideoId = typeof videoIdObj === 'string' 
+              ? videoIdObj
+              : 'videoId' in videoIdObj ? videoIdObj.videoId : null;
+              
+            if (finalVideoId) {
+              setVideoId(finalVideoId);
+              setStreamFound(true); // Mark as found to prevent further API calls
+              console.debug(
+                '%c✅ SUCCESS: %cFound livestream with ID: %c' + finalVideoId + '\n' +
+                '%c━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
+                'background: #34A853; color: white; padding: 2px 5px; border-radius: 3px; font-weight: bold;',
+                'color: #34A853;',
+                'color: white; font-weight: bold;',
+                'color: #6441a5; font-weight: bold;'
+              );
+              return;
+            }
+          }
+          
+          // If no live stream found, use fallback
           setUseFallback(true);
+          setStreamFound(true); // Mark as found to prevent further API calls
         }
       } catch (error) {
         console.error(
@@ -203,11 +225,17 @@ const YouTubeStream: React.FC<YouTubeStreamProps> = ({ username }) => {
           error
         );
         setUseFallback(true);
+        setStreamFound(true); // Mark as found even on error to prevent retries
       }
     };
 
-    fetchLiveStream().catch(console.error);
-  }, [username, cleanUsername]); // Added cleanUsername as dependency
+    // Create a wrapper function to handle the Promise
+    const handleFetch = () => {
+      void fetchLiveStream();
+    };
+
+    handleFetch();
+  }, [username, cleanUsername, channelId, streamFound, useFallback]); // Added streamFound to dependencies
 
   // Debug message for which method is being used
   useEffect(() => {
